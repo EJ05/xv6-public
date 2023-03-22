@@ -6,6 +6,8 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "pstat.h"
+#include "random.h"
 
 struct {
   struct spinlock lock;
@@ -138,6 +140,8 @@ userinit(void)
   p->tf->eflags = FL_IF;
   p->tf->esp = PGSIZE;
   p->tf->eip = 0;  // beginning of initcode.S
+  p->tickets = 10;
+  p->ticks = 0;
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -199,6 +203,8 @@ fork(void)
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
+  np->tickets = curproc->tickets;
+  np->ticks = 0;
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
@@ -313,45 +319,110 @@ wait(void)
 
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
 //  - choose a process to run
 //  - swtch to start running that process
 //  - eventually that process transfers control
 //      via swtch back to the scheduler.
+//void
+//scheduler(void)
+//{
+//  struct proc *p;
+//  struct cpu *c = mycpu();
+//  c->proc = 0;
+//  
+//  for(;;){
+//    // Enable interrupts on this processor.
+//    sti();
+//
+//    // Loop over process table looking for process to run.
+//    acquire(&ptable.lock);
+//    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+//      if(p->state != RUNNABLE)
+//        continue;
+//
+//      // Switch to chosen process.  It is the process's job
+//      // to release ptable.lock and then reacquire it
+//      // before jumping back to us.
+//      c->proc = p;
+//      switchuvm(p);
+//      p->state = RUNNING;
+//      p->ticks++;
+//
+//      swtch(&(c->scheduler), p->context);
+//      switchkvm();
+//
+//      // Process is done running for now.
+//      // It should have changed its p->state before coming back.
+//      c->proc = 0;
+//    }
+//    release(&ptable.lock);
+//
+//  }
+//}
+
+int 
+getTotalTickets(void)
+{
+  struct proc *p;
+  int total = 0;
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if (p->state == RUNNABLE)
+      total += p->tickets;
+  }
+
+  return total + 1;
+}
+
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
-  for(;;){
+  srand(0);
+
+  for(;;)
+  {
     // Enable interrupts on this processor.
     sti();
 
+    long counter = 0;
+
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
+    long total = getTotalTickets() *1LL;
+    long winner = rand() % total;
+
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+    {
+      if (p->state != RUNNABLE)
         continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+      counter = counter + p->tickets;
+      if (counter > winner)
+      {
+        // Switch to chosen process. It is the process's job
+	// to release ptable.lock and then reacquire it 
+	// before jumping back to us.
+	c->proc = p;
+	switchuvm(p);
+	p->state = RUNNING;
+	p->ticks++;
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+	swtch(&(c->scheduler), p->context);
+	switchkvm();
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+	// Process is done running for now.
+	// It should have changed its p->state before coming back.
+	c->proc = 0;
+
+	break;
+      }
     }
     release(&ptable.lock);
-
   }
 }
 
@@ -531,4 +602,52 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+int
+settickets(int number)
+{
+  struct proc *pr = myproc();
+  int pid = pr->pid;
+
+  acquire(&ptable.lock);
+
+  struct proc *p;
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if (p->pid == pid)
+    {
+      p->tickets = number;
+      release(&ptable.lock);
+      return 0;
+    }
+  }
+
+  release(&ptable.lock);
+  return 0;
+}
+
+int
+getpinfo(struct pstat *ps)
+{
+  acquire(&ptable.lock);
+
+  struct proc *p;
+  int i = 0;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
+  {
+    if (p->state == UNUSED)
+      continue;
+
+    ps->pid[i] = p->pid;
+    ps->tickets[i] = p->tickets;
+    ps->ticks[i] = p->ticks;
+    i++;
+  }
+
+  ps->num_processes = i;
+
+  release(&ptable.lock);
+
+  return 0;
 }

@@ -166,6 +166,8 @@ mkfs: mkfs.c fs.h
 .PRECIOUS: %.o
 
 UPROGS=\
+        _lotteryTest\
+        _ps\
         _date\
 	_hello\
 	_cat\

@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
+#include "pstat.h"
 
 int
 sys_fork(void)
@@ -97,5 +98,33 @@ sys_date(void)
   if (argptr(0, (void*)&r, sizeof(*r)) < 0)
     return -1;
   cmostime(r);
+  return 0;
+}
+
+int
+sys_settickets(void)
+{
+  int number;
+  argint(0, &number);
+
+  if (number < 1 || number > 100000)
+    return -1;
+  return settickets(number);
+}
+
+int
+sys_getpinfo(void)
+{
+  struct pstat *ps;
+  if (argptr(0, (char **)&ps, sizeof(struct pstat)) < 0)
+    return -1;
+  getpinfo(ps);
+  return 0;
+}
+
+int
+sys_yield(void)
+{
+  yield();
   return 0;
 }
